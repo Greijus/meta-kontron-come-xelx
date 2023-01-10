@@ -1,0 +1,52 @@
+From ebe3777117164889c356e8b359fa158f1c5cbd8b Mon Sep 17 00:00:00 2001
+From: Bean Huo <beanhuo@micron.com>
+Date: Mon, 3 May 2021 23:35:32 +0200
+Subject: [PATCH 6/6] mmc: block: Disable CMDQ on the ioctl path
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+According to the eMMC Spec:
+"When command queuing is enabled (CMDQ Mode En bit in CMDQ_MODE_EN
+field is set to ‘1’) class 11 commands are the only method through
+which data transfer tasks can be issued. Existing data transfer
+commands, namely CMD18/CMD17 and CMD25/CMD24, are not supported when
+command queuing is enabled."
+which means if CMDQ is enabled, the FFU commands will not be supported.
+To fix this issue, just simply disable CMDQ on the ioctl path, and
+re-enable CMDQ once ioctl request is completed.
+
+Tested-by: Michael Brunner <Michael.Brunner@kontron.com>
+Signed-off-by: Bean Huo <beanhuo@micron.com>
+---
+ drivers/mmc/core/block.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/mmc/core/block.c b/drivers/mmc/core/block.c
+index 780da11c34fdd..56a9e156404fb 100644
+--- a/drivers/mmc/core/block.c
++++ b/drivers/mmc/core/block.c
+@@ -1054,6 +1054,11 @@ static void mmc_blk_issue_drv_op(struct mmc_queue *mq, struct request *req)
+ 
+ 	switch (mq_rq->drv_op) {
+ 	case MMC_DRV_OP_IOCTL:
++		if (card->ext_csd.cmdq_en) {
++			ret = mmc_cmdq_disable(card);
++			if (ret)
++				break;
++		}
+ 	case MMC_DRV_OP_IOCTL_RPMB:
+ 		idata = mq_rq->drv_op_data;
+ 		for (i = 0, ret = 0; i < mq_rq->ioc_count; i++) {
+@@ -1064,6 +1069,8 @@ static void mmc_blk_issue_drv_op(struct mmc_queue *mq, struct request *req)
+ 		/* Always switch back to main area after RPMB access */
+ 		if (rpmb_ioctl)
+ 			mmc_blk_part_switch(card, 0);
++		else if (card->reenable_cmdq && !card->ext_csd.cmdq_en)
++			mmc_cmdq_enable(card);
+ 		break;
+ 	case MMC_DRV_OP_BOOT_WP:
+ 		ret = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_BOOT_WP,
+-- 
+2.25.1
+

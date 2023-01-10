@@ -1,0 +1,116 @@
+From 767e3b8090b1e6965535d6154fab865327f92f92 Mon Sep 17 00:00:00 2001
+From: Michael Brunner <michael.brunner@kontron.com>
+Date: Tue, 2 Oct 2018 18:56:07 +0200
+Subject: [PATCH 4/6] spidev: Add dummy driver to bind spi0 to spidev
+
+This driver binds spi0 to the spidev driver so it can be used from
+userspace without the need to register the controller using ACPI or
+a separate platform driver.
+
+Signed-off-by: Michael Brunner <michael.brunner@kontron.com>
+---
+ drivers/spi/Kconfig        |  6 ++++
+ drivers/spi/Makefile       |  1 +
+ drivers/spi/spidev-dummy.c | 61 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 68 insertions(+)
+ create mode 100644 drivers/spi/spidev-dummy.c
+
+diff --git a/drivers/spi/Kconfig b/drivers/spi/Kconfig
+index 5bf7542087776..862a5130d8ae4 100644
+--- a/drivers/spi/Kconfig
++++ b/drivers/spi/Kconfig
+@@ -894,6 +894,12 @@ config SPI_SPIDEV
+ 	  Note that this application programming interface is EXPERIMENTAL
+ 	  and hence SUBJECT TO CHANGE WITHOUT NOTICE while it stabilizes.
+ 
++config SPI_SPIDEV_DUMMY
++	tristate "Register spidev driver on spi0"
++	depends on SPI_SPIDEV
++	help
++	  This option should only be used for testing and development.
++
+ config SPI_LOOPBACK_TEST
+ 	tristate "spi loopback test framework support"
+ 	depends on m
+diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
+index bb49c9e6d0a0c..bc326a0144563 100644
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -10,6 +10,7 @@ ccflags-$(CONFIG_SPI_DEBUG) := -DDEBUG
+ obj-$(CONFIG_SPI_MASTER)		+= spi.o
+ obj-$(CONFIG_SPI_MEM)			+= spi-mem.o
+ obj-$(CONFIG_SPI_SPIDEV)		+= spidev.o
++obj-$(CONFIG_SPI_SPIDEV_DUMMY)		+= spidev-dummy.o
+ obj-$(CONFIG_SPI_LOOPBACK_TEST)		+= spi-loopback-test.o
+ 
+ # SPI master controller drivers (bus)
+diff --git a/drivers/spi/spidev-dummy.c b/drivers/spi/spidev-dummy.c
+new file mode 100644
+index 0000000000000..6fdd80b582f1e
+--- /dev/null
++++ b/drivers/spi/spidev-dummy.c
+@@ -0,0 +1,61 @@
++#include <linux/module.h>
++#include <linux/err.h>
++#include <linux/init.h>
++#include <linux/spi/spi.h>
++
++static struct spi_board_info spidev_dummy_board_info[] = {
++	{
++	 .modalias = "spidev",
++	 .bus_num = 0,
++	 .chip_select = 0,
++	 },
++};
++static struct spi_device *spi_devices[ARRAY_SIZE(spidev_dummy_board_info)];
++
++
++static int __init spidev_dummy_init(void)
++{
++	struct spi_master *master;
++	int spi_device_count = ARRAY_SIZE(spidev_dummy_board_info);
++	int bus = 0;
++	int i;
++
++	pr_info("Registering spidev dummy board info\n");
++
++	master = spi_busnum_to_master(bus);
++	if (!master) {
++		pr_err("Unable to register to spi master (%d)\n", bus);
++		return -ENODEV;
++	}
++
++	for (i = 0; i < spi_device_count; i++) {
++		spi_devices[i] = spi_new_device(master,
++					     &spidev_dummy_board_info[i]);
++		if (!spi_devices[i]) {
++			dev_err(&master->dev,
++				"Failed to add new SPI device\n");
++			return -EPERM;
++		}
++	}
++
++	return 0;
++}
++
++static void __exit spidev_dummy_exit(void)
++{
++	int spi_device_count = ARRAY_SIZE(spidev_dummy_board_info);
++	int i;
++
++	for (i = 0; i < spi_device_count; i++) {
++		device_del(&spi_devices[i]->dev);
++		kfree(spi_devices[i]);
++	}
++}
++
++module_init(spidev_dummy_init);
++module_exit(spidev_dummy_exit);
++
++MODULE_DESCRIPTION("SPI DUMMY");
++MODULE_AUTHOR("Michael Brunner <michael.brunner@kontron.com>");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("platform:spidev-dummy");
+-- 
+2.25.1
+

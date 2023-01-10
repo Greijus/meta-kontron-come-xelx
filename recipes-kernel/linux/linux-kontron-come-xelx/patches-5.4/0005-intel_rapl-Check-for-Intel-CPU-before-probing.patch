@@ -1,0 +1,34 @@
+From a6dbd864ea80d78c91e10cc81b362fe69fafb300 Mon Sep 17 00:00:00 2001
+From: Michael Brunner <michael.brunner@kontron.com>
+Date: Tue, 17 Mar 2020 17:37:15 +0100
+Subject: [PATCH 5/6] intel_rapl: Check for Intel CPU before probing
+
+The driver generates an error if running CPU is not supported.
+Prevent this on non Intel systems and reduce to warning.
+
+Signed-off-by: Michael Brunner <michael.brunner@kontron.com>
+---
+ drivers/powercap/intel_rapl_common.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/powercap/intel_rapl_common.c b/drivers/powercap/intel_rapl_common.c
+index 05d77242a4302..fad4c7e805125 100644
+--- a/drivers/powercap/intel_rapl_common.c
++++ b/drivers/powercap/intel_rapl_common.c
+@@ -1424,9 +1424,12 @@ static int __init rapl_init(void)
+ 	const struct x86_cpu_id *id;
+ 	int ret;
+ 
++	if (boot_cpu_data.x86_vendor != X86_VENDOR_INTEL)
++		return -ENODEV;
++
+ 	id = x86_match_cpu(rapl_ids);
+ 	if (!id) {
+-		pr_err("driver does not support CPU family %d model %d\n",
++		pr_warn("driver does not support CPU family %d model %d\n",
+ 		       boot_cpu_data.x86, boot_cpu_data.x86_model);
+ 
+ 		return -ENODEV;
+-- 
+2.25.1
+

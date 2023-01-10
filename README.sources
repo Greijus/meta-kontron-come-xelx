@@ -1,0 +1,17 @@
+The sources for the packages comprising the images shipped with this BSP can be
+found at the following location:
+
+http://downloads.yoctoproject.org/mirror/sources/
+
+The metadata used to generate the images shipped with this BSP, in addition to
+the code contained in this layer, can be found at the following locations:
+
+http://downloads.yoctoproject.org/releases/yocto/yocto-3.1.8/poky-dunfell-23.0.8.tar.bz2
+http://git.yoctoproject.org/cgit/cgit.cgi/meta-intel/snapshot/meta-intel-dunfell.tar.bz2
+
+It is also available in the following git repositories (BRANCH GIT_URL):
+
+dunfell https://git.yoctoproject.org/poky
+dunfell https://git.yoctoproject.org/meta-intel
+dunfell https://git.yoctoproject.org/git/meta-security
+dunfell git://git.openembedded.org/meta-openembedded

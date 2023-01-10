@@ -1,0 +1,13 @@
+# Those are optional features usefull for debugging and tuning
+# They will be enabled automatically if debug-tweaks are included in the
+# IMAGE_FEATURES
+# see ../linux-common.inc
+
+include cfg/fs/debugfs.scc
+include features/debug/printk.scc
+
+include features/profiling/profiling.scc
+include features/latencytop/latencytop.scc
+include cfg/debug/tracer/debug-hwlat_tracer.scc
+
+include debug-features.cfg

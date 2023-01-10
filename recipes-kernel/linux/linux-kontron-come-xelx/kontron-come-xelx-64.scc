@@ -1,0 +1,25 @@
+kconf hardware defconfig
+
+# Additional debug functions will be enabled for debug images
+# see linux-common.inc
+
+include cfg/amd.scc
+include cfg/intel.scc
+include cfg/efi-ext.scc
+include cfg/smp_64.scc
+
+include cfg/usb-mass-storage.scc
+include cfg/boot-live.scc
+
+include features/intel-pinctrl/intel-pinctrl.scc
+include features/sound/snd_hda_intel.scc
+include features/can/can.scc
+kconf hardware can-overrides.cfg
+
+# Additional kernel fragments
+include features/media/media-all.scc
+include features/netfilter/netfilter.scc
+include features/net_sched/net_sched.scc
+include cfg/net/bridge.scc
+
+kconf hardware kontron-come-xelx.cfg

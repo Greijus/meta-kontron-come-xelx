@@ -1,0 +1,7 @@
+define KMACHINE kontron-come-xelx-64
+define KTYPE preempt-rt
+define KARCH x86_64
+
+include kontron-come-xelx-64.scc
+
+kconf non-hardware ktypes/preempt-rt/preempt-rt.cfg

@@ -1,0 +1,329 @@
+From bca745cb94854ac92c6d4ae412fee2eb5dd0d989 Mon Sep 17 00:00:00 2001
+From: Michael Brunner <michael.brunner@kontron.com>
+Date: Fri, 3 Mar 2017 14:18:45 +0100
+Subject: [PATCH 3/6] pps: Add PPS generator based on legacy GPIOs
+
+This adds a PPS generator that accepts legacy GPIO numbers as
+parameter.
+
+The original driver by Juan Solano <jsm@jsolano.com> is available
+here:
+    https://github.com/jsln/pps-gen-gpio/
+
+Signed-off-by: Michael Brunner <michael.brunner@kontron.com>
+---
+ drivers/pps/generators/Kconfig            |   8 +
+ drivers/pps/generators/Makefile           |   1 +
+ drivers/pps/generators/pps_gen_gpio_leg.c | 272 ++++++++++++++++++++++
+ 3 files changed, 281 insertions(+)
+ create mode 100644 drivers/pps/generators/pps_gen_gpio_leg.c
+
+diff --git a/drivers/pps/generators/Kconfig b/drivers/pps/generators/Kconfig
+index d615e640fcadc..9c53924aae890 100644
+--- a/drivers/pps/generators/Kconfig
++++ b/drivers/pps/generators/Kconfig
+@@ -12,3 +12,11 @@ config PPS_GENERATOR_PARPORT
+ 	  If you say yes here you get support for a PPS signal generator which
+ 	  utilizes STROBE pin of a parallel port to send PPS signals. It uses
+ 	  parport abstraction layer and hrtimers to precisely control the signal.
++
++config PPS_GENERATOR_GPIO_LEGACY
++    depends on GPIOLIB
++	tristate "Legacy GPIO PPS signal generator"
++	help
++	  If you say yes here you get support for a PPS signal generator which
++	  utilizes a GPIO pin specified by providing a legacy GPIO number.
++	  It uses hrtimers to precisely control the signal.
+diff --git a/drivers/pps/generators/Makefile b/drivers/pps/generators/Makefile
+index 2d56dd0495d59..4d6c2e4346aa5 100644
+--- a/drivers/pps/generators/Makefile
++++ b/drivers/pps/generators/Makefile
+@@ -4,6 +4,7 @@
+ #
+ 
+ obj-$(CONFIG_PPS_GENERATOR_PARPORT) += pps_gen_parport.o
++obj-$(CONFIG_PPS_GENERATOR_GPIO_LEGACY) += pps_gen_gpio_leg.o
+ 
+ ifeq ($(CONFIG_PPS_DEBUG),y)
+ EXTRA_CFLAGS += -DDEBUG
+diff --git a/drivers/pps/generators/pps_gen_gpio_leg.c b/drivers/pps/generators/pps_gen_gpio_leg.c
+new file mode 100644
+index 0000000000000..8d80e1f33c2c6
+--- /dev/null
++++ b/drivers/pps/generators/pps_gen_gpio_leg.c
+@@ -0,0 +1,272 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * pps_gen_gpio_leg.c -- kernel GPIO PPS signal generator
++ *
++ *
++ * Copyright (C) 2015   Juan Solano <jsm@jsolano.com>
++ *               2009   Alexander Gordeev <lasaine@lvk.cs.msu.su>
++ */
++
++
++/*
++ * This version of the driver has been modified to use legacy GPIOs to
++ * be usable for testing.
++ *
++ * Updated by Michael Brunner <michael.brunner@kontron.com>
++ *
++ * The original can be found here:
++ * https://github.com/jsln/pps-gen-gpio/
++ *
++ * TODO:
++ * fix issues when realtime clock is adjusted in a leap
++ */
++
++#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/time.h>
++#include <linux/hrtimer.h>
++#include <linux/gpio.h>
++#include <linux/gpio/consumer.h>
++
++#define DRVDESC "Legacy GPIO PPS signal generator"
++#define SEND_DELAY_MAX  100000
++#define SAFETY_INTERVAL  10000	/* set the hrtimer earlier for safety (ns) */
++
++/* module parameters */
++static unsigned int send_delay = 30000;
++static unsigned int req_gpio;
++MODULE_PARM_DESC(delay,	"Delay between setting and dropping the signal (ns)");
++module_param_named(delay, send_delay, uint, 0444);
++MODULE_PARM_DESC(gpio,	"GPIO to use (GPIO Nr)");
++module_param_named(gpio, req_gpio, uint, 0444);
++
++/* device specific private data structure */
++struct pps_gen_gpio_devdata {
++	struct gpio_desc *pps_gpio;	/* GPIO port descriptor */
++	struct hrtimer timer;
++	long port_write_time;		/* calibrated port write time (ns) */
++};
++
++
++/* calibrated time between a hrtimer event and the reaction */
++static long hrtimer_error = SAFETY_INTERVAL;
++
++/* the kernel hrtimer event */
++static enum hrtimer_restart hrtimer_event(struct hrtimer *timer)
++{
++	struct timespec64 expire_time, ts1, ts2, ts3, dts;
++	struct pps_gen_gpio_devdata *devdata;
++	long lim, delta;
++	unsigned long flags;
++
++	/* We have to disable interrupts here. The idea is to prevent
++	 * other interrupts on the same processor to introduce random
++	 * lags while polling the clock. ktime_get_real_ts64() takes <1us on
++	 * most machines while other interrupt handlers can take much
++	 * more potentially.
++	 *
++	 * NB: approx time with blocked interrupts =
++	 * send_delay + 3 * SAFETY_INTERVAL
++	 */
++	local_irq_save(flags);
++
++	/* first of all we get the time stamp... */
++	ktime_get_real_ts64(&ts1);
++	expire_time = ktime_to_timespec64(hrtimer_get_softexpires(timer));
++	devdata = container_of(timer, struct pps_gen_gpio_devdata, timer);
++	lim = NSEC_PER_SEC - send_delay - devdata->port_write_time;
++
++	/* check if we are late */
++	if (expire_time.tv_sec != ts1.tv_sec || ts1.tv_nsec > lim) {
++		local_irq_restore(flags);
++		pr_err("we are late this time %lld.%09ld\n",
++				(s64)ts1.tv_sec, ts1.tv_nsec);
++		goto done;
++	}
++
++	/* busy loop until the time is right for an assert edge */
++	do {
++		ktime_get_real_ts64(&ts2);
++	} while (expire_time.tv_sec == ts2.tv_sec && ts2.tv_nsec < lim);
++
++	/* set the signal */
++	gpiod_set_value(devdata->pps_gpio, 1);
++
++	/* busy loop until the time is right for a clear edge */
++	lim = NSEC_PER_SEC - devdata->port_write_time;
++	do {
++		ktime_get_real_ts64(&ts2);
++	} while (expire_time.tv_sec == ts2.tv_sec && ts2.tv_nsec < lim);
++
++	/* unset the signal */
++	gpiod_set_value(devdata->pps_gpio, 0);
++
++	ktime_get_real_ts64(&ts3);
++
++	local_irq_restore(flags);
++
++	/* update calibrated port write time */
++	dts = timespec64_sub(ts3, ts2);
++	devdata->port_write_time =
++		(devdata->port_write_time + timespec64_to_ns(&dts)) >> 1;
++
++done:
++	/* update calibrated hrtimer error */
++	dts = timespec64_sub(ts1, expire_time);
++	delta = timespec64_to_ns(&dts);
++
++	/* If the new error value is bigger then the old, use the new
++	 * value, if not then slowly move towards the new value. This
++	 * way it should be safe in bad conditions and efficient in
++	 * good conditions.
++	 */
++	if (delta >= hrtimer_error)
++		hrtimer_error = delta;
++	else
++		hrtimer_error = (3 * hrtimer_error + delta) >> 2;
++
++	/* update the hrtimer expire time */
++	hrtimer_set_expires(timer,
++			    ktime_set(expire_time.tv_sec + 1,
++				      NSEC_PER_SEC - (send_delay +
++				      devdata->port_write_time +
++				      SAFETY_INTERVAL +
++				      hrtimer_error)));
++
++	return HRTIMER_RESTART;
++}
++
++/* calibrate port write time */
++#define PORT_NTESTS_SHIFT	5
++static void calibrate_port(struct pps_gen_gpio_devdata *devdata)
++{
++	int i;
++	long acc = 0;
++
++	for (i = 0; i < (1 << PORT_NTESTS_SHIFT); i++) {
++		struct timespec64 a, b;
++		unsigned long irq_flags;
++
++		local_irq_save(irq_flags);
++		ktime_get_real_ts64(&a);
++		gpiod_set_value_cansleep(devdata->pps_gpio, 0);
++		ktime_get_real_ts64(&b);
++		local_irq_restore(irq_flags);
++
++		b = timespec64_sub(b, a);
++		acc += timespec64_to_ns(&b);
++	}
++
++	devdata->port_write_time = acc >> PORT_NTESTS_SHIFT;
++	pr_info("port write takes %ldns\n", devdata->port_write_time);
++}
++
++static inline ktime_t next_intr_time(struct pps_gen_gpio_devdata *devdata)
++{
++	struct timespec64 ts;
++
++	ktime_get_real_ts64(&ts);
++	return ktime_set(ts.tv_sec +
++			((ts.tv_nsec > 990 * NSEC_PER_MSEC) ? 1 : 0),
++			NSEC_PER_SEC - (send_delay +
++			devdata->port_write_time + 3 * SAFETY_INTERVAL));
++}
++
++static int pps_gen_gpio_probe(struct platform_device *pdev)
++{
++	int ret;
++	struct device *dev = &pdev->dev;
++	struct pps_gen_gpio_devdata *devdata;
++
++	/* allocate space for device info */
++	devdata = devm_kzalloc(dev, sizeof(struct pps_gen_gpio_devdata),
++			       GFP_KERNEL);
++	if (!devdata)
++		return -ENOMEM;
++
++	if (gpio_request_one(req_gpio, 0, "pps-gen")) {
++		dev_err(dev, "cannot request GPIO %u\n", req_gpio);
++		return -ENODEV;
++	}
++
++	devdata->pps_gpio = gpio_to_desc(req_gpio);
++
++	pr_info("bound to GPIO %u\n", req_gpio);
++
++	platform_set_drvdata(pdev, devdata);
++
++	ret = gpiod_direction_output(devdata->pps_gpio, 1);
++	if (ret < 0) {
++		dev_err(dev, "cannot configure PPS GPIO\n");
++		gpio_free(desc_to_gpio(devdata->pps_gpio));
++		return ret;
++	}
++
++	calibrate_port(devdata);
++
++	hrtimer_init(&devdata->timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
++	devdata->timer.function = hrtimer_event;
++	hrtimer_start(&devdata->timer, next_intr_time(devdata),
++		      HRTIMER_MODE_ABS);
++	return 0;
++}
++
++static int pps_gen_gpio_remove(struct platform_device *pdev)
++{
++	struct pps_gen_gpio_devdata *devdata = platform_get_drvdata(pdev);
++
++	gpio_free(desc_to_gpio(devdata->pps_gpio));
++
++	hrtimer_cancel(&devdata->timer);
++	return 0;
++}
++
++static struct platform_driver pps_gen_gpio_leg_driver = {
++	.driver		= {
++		.name	= "pps_gen_gpio_leg", /* not used to match device */
++		.owner	= THIS_MODULE,
++	},
++	.probe		= pps_gen_gpio_probe,
++	.remove		= pps_gen_gpio_remove,
++};
++
++static struct platform_device *pps_gen_gpio_leg_device;
++
++static int __init pps_gen_gpio_leg_init(void)
++{
++	int ret;
++
++	pr_info(DRVDESC "\n");
++	if (send_delay > SEND_DELAY_MAX) {
++		pr_err("delay value should be not greater than %d\n",
++		       SEND_DELAY_MAX);
++		return -EINVAL;
++	}
++	ret = platform_driver_register(&pps_gen_gpio_leg_driver);
++	if (ret)
++		return ret;
++
++	pps_gen_gpio_leg_device =
++		platform_device_register_simple("pps_gen_gpio_leg", -1,
++						NULL, 0);
++
++	return 0;
++}
++
++static void __exit pps_gen_gpio_leg_exit(void)
++{
++	pr_info("hrtimer avg error is %ldns\n", hrtimer_error);
++	platform_device_unregister(pps_gen_gpio_leg_device);
++	platform_driver_unregister(&pps_gen_gpio_leg_driver);
++}
++
++module_init(pps_gen_gpio_leg_init);
++module_exit(pps_gen_gpio_leg_exit);
++
++MODULE_AUTHOR("Juan Solano <jsm@jsolano.com>");
++MODULE_DESCRIPTION(DRVDESC);
++MODULE_LICENSE("GPL");
+-- 
+2.25.1
+

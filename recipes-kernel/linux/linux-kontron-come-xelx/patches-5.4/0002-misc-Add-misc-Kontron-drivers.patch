@@ -1,0 +1,1649 @@
+From 0c62c5a81ff01e3513fbd5d410223034a0f201a6 Mon Sep 17 00:00:00 2001
+From: Michael Brunner <michael.brunner@kontron.com>
+Date: Wed, 21 Jul 2021 08:50:57 +0200
+Subject: [PATCH 2/6] misc: Add misc Kontron drivers
+
+This patch adds the Kontron Linux kernel driver package
+
+The Kontron driver package provides support for additional functionality
+provided on some Kontron embedded modules.
+
+** Available drivers **
+
+kontron_bl driver:
+
+From Andrey Rusalin <arusalin@dev.rtsoft.ru>
+
+This driver provides a backlight functionality that may be available:
+ - either through I2C bus implemented via GPIO bit-banging
+   (nanoETXexpress-TT);
+ - or through I2C Intel drm bus (COMe-mCT10/COMe-cCT6);
+ - or through PWM on CedarView (COMe-mCT10/COMe-cCT6).
+It also allows a user to manually define the backlight control method by
+setting the following module parameter:
+ - param_bl_type=1 for PWM mode;
+ - param_bl_type=2 for I2C mode;
+ - param_bl_type=5 for I2C inverted mode;
+ - param_bl_type=6 for PWM inverted mode;
+ - param_bl_type=0(default) for autodetection.
+
+kontron-bootcounter driver:
+
+The boot counter driver allows to access the boot counter functionality
+that may be available through the DMI table.
+The value will be accessible through:
+  /sys/devices/platform/kontron-bootcounter/count
+
+kontron-eeep driver:
+
+The Embedded EEPROM driver allows reading and writing access to the User
+Area of an EEPROM that is available on all newer Kontron Modules. In order
+for this driver to work with the internal EEPROM equipped on the Kontron
+modules the kempld-i2c driver, which is available in a separate package,
+has to be installed.
+The I2C devices with available Kontron EEEP will be listed in
+    /sys/bus/i2c/drivers/kontron_eeep/
+The first device found will also be linked to the following location:
+    /sys/kernel/kontron_eeep/kontron_eeep
+
+Signed-off-by: Michael Brunner <michael.brunner@kontron.com>
+---
+ drivers/misc/Kconfig                 |  10 +
+ drivers/misc/Makefile                |   1 +
+ drivers/misc/eeprom/Kconfig          |  13 +
+ drivers/misc/eeprom/Makefile         |   1 +
+ drivers/misc/eeprom/kontron_eeep.c   | 477 ++++++++++++++++++
+ drivers/misc/kontron_bootcounter.c   | 266 ++++++++++
+ drivers/video/backlight/Kconfig      |  16 +
+ drivers/video/backlight/Makefile     |   1 +
+ drivers/video/backlight/kontron_bl.c | 713 +++++++++++++++++++++++++++
+ 9 files changed, 1498 insertions(+)
+ create mode 100644 drivers/misc/eeprom/kontron_eeep.c
+ create mode 100644 drivers/misc/kontron_bootcounter.c
+ create mode 100644 drivers/video/backlight/kontron_bl.c
+
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index 1571874ecd080..8d54be52fc5ca 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -400,6 +400,16 @@ config PCH_PHUB
+ 	  To compile this driver as a module, choose M here: the module will
+ 	  be called pch_phub.
+ 
++config KONTRON_BOOTCOUNTER
++	tristate "Kontron Bootcounter"
++	depends on SYSFS
++	help
++	  If you say yes here you get support for the bootcounter on some Kontron
++	  Embedded Modules.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called kontron_bootcounter.
++
+ config LATTICE_ECP3_CONFIG
+ 	tristate "Lattice ECP3 FPGA bitstream configuration via SPI"
+ 	depends on SPI && SYSFS
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index c6e1114fdf744..25128aef6e8c7 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -44,6 +44,7 @@ obj-$(CONFIG_ALTERA_STAPL)	+=altera-stapl/
+ obj-$(CONFIG_INTEL_MEI)		+= mei/
+ obj-$(CONFIG_VMWARE_VMCI)	+= vmw_vmci/
+ obj-$(CONFIG_LATTICE_ECP3_CONFIG)	+= lattice-ecp3-config.o
++obj-$(CONFIG_KONTRON_BOOTCOUNTER)	+= kontron_bootcounter.o
+ obj-$(CONFIG_SRAM)		+= sram.o
+ obj-$(CONFIG_SRAM_EXEC)		+= sram-exec.o
+ obj-y				+= mic/
+diff --git a/drivers/misc/eeprom/Kconfig b/drivers/misc/eeprom/Kconfig
+index 0f791bfdc1f58..580a0682c6d8c 100644
+--- a/drivers/misc/eeprom/Kconfig
++++ b/drivers/misc/eeprom/Kconfig
+@@ -96,6 +96,19 @@ config EEPROM_93XX46
+ 
+ 	  If unsure, say N.
+ 
++config EEPROM_KONTRON_EEEP
++	tristate "Embedded EEPROM support for Kontron Modules"
++	depends on I2C && SYSFS && I2C_KEMPLD
++	help
++	  This driver allows rw access to the User Area of Kontron EEEP
++	  implementations. A sysfs entry called kontron_eeep will be
++	  created to allow access to the user area data.
++
++	  This driver can also be built as a module.  If so, the module
++	  will be called kontron_eeep.
++
++	  If unsure, say N.
++
+ config EEPROM_DIGSY_MTC_CFG
+ 	bool "DigsyMTC display configuration EEPROMs device"
+ 	depends on GPIO_MPC5200 && SPI_GPIO
+diff --git a/drivers/misc/eeprom/Makefile b/drivers/misc/eeprom/Makefile
+index a9b4b6579b75a..8ac08f6fac173 100644
+--- a/drivers/misc/eeprom/Makefile
++++ b/drivers/misc/eeprom/Makefile
+@@ -3,6 +3,7 @@ obj-$(CONFIG_EEPROM_AT24)	+= at24.o
+ obj-$(CONFIG_EEPROM_AT25)	+= at25.o
+ obj-$(CONFIG_EEPROM_LEGACY)	+= eeprom.o
+ obj-$(CONFIG_EEPROM_MAX6875)	+= max6875.o
++obj-$(CONFIG_EEPROM_KONTRON_EEEP) += kontron_eeep.o
+ obj-$(CONFIG_EEPROM_93CX6)	+= eeprom_93cx6.o
+ obj-$(CONFIG_EEPROM_93XX46)	+= eeprom_93xx46.o
+ obj-$(CONFIG_EEPROM_DIGSY_MTC_CFG) += digsy_mtc_eeprom.o
+diff --git a/drivers/misc/eeprom/kontron_eeep.c b/drivers/misc/eeprom/kontron_eeep.c
+new file mode 100644
+index 0000000000000..6ea6f845df35c
+--- /dev/null
++++ b/drivers/misc/eeprom/kontron_eeep.c
+@@ -0,0 +1,477 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * kontron_eeep.c - Embedded EEPROM driver for Kontron Modules.
++ *
++ * Based on chr2_eeprom driver.
++ * Author: Viktor Krasnov <vkrasnov@dev@rtsoft.ru>
++ *
++ * Copyright (C) 2011-2014 Kontron Europe GmbH
++ * Michael Brunner <michael.brunner@kontron.com>
++ * Przemyslaw Rokosz <przemyslaw.rokosz@kontron.com>
++ */
++
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/slab.h>
++#include <linux/i2c.h>
++#include <linux/mutex.h>
++#include <linux/delay.h>
++
++/* Addresses to scan */
++static const unsigned short kontron_normal_i2c[] = { 0x50, I2C_CLIENT_END };
++static int link_count;
++
++/* Each client has this additional data */
++struct kontron_eeep_data {
++	struct mutex update_lock;
++	u8 *eeprom;
++	u16 u_area_start;
++	u16 u_area_end;
++};
++
++static ssize_t kontron_eeep_read(struct file *filp, struct kobject *kobj,
++			   struct bin_attribute *bin_attr,
++			   char *buf, loff_t off, size_t count)
++{
++	struct i2c_client *client = to_i2c_client(container_of(kobj,
++							       struct device,
++							       kobj));
++	struct kontron_eeep_data *data = i2c_get_clientdata(client);
++	u8 off_low, off_high;
++	int i, user_area_size;
++
++	user_area_size = data->u_area_end - data->u_area_start + 1;
++
++	if (off > user_area_size)
++		return 0;
++	if (off + count > user_area_size)
++		count = user_area_size - off;
++
++	off_low = (u8) ((data->u_area_start + off) & 0xff);
++	off_high = (u8) (((data->u_area_start + off)>>8) & 0xff);
++
++	mutex_lock(&data->update_lock);
++
++	i2c_smbus_write_byte_data(client, off_high, off_low);
++
++	for  (i = 0; i < count; i++) {
++		int byte = i2c_smbus_read_byte(client);
++
++		if (byte < 0) {
++			dev_err(&client->dev, "address 0x%llx can't be read\n",
++				(unsigned long long)off + i);
++			mutex_unlock(&data->update_lock);
++			return i;
++		}
++		buf[i] = byte & 0xff;
++	}
++
++	mutex_unlock(&data->update_lock);
++
++	return count;
++}
++
++static ssize_t kontron_eeep_write(struct file *filp, struct kobject *kobj,
++				struct bin_attribute *bin_attr,
++				char *buf, loff_t off, size_t count)
++{
++	struct i2c_client *client = to_i2c_client(container_of(kobj,
++							       struct device,
++							       kobj));
++	struct kontron_eeep_data *data = i2c_get_clientdata(client);
++
++	u8 off_low, off_high;
++	u16 word;
++	int i, ret, user_area_size;
++
++	user_area_size = data->u_area_end - data->u_area_start + 1;
++
++	if (off > user_area_size)
++		return 0;
++	if (off + count > user_area_size)
++		count = user_area_size - off;
++
++	mutex_lock(&data->update_lock);
++
++	for (i = 0; i < count; i++) {
++		off_low = (u8) ((data->u_area_start + off + i) & 0xff);
++		off_high = (u8) (((data->u_area_start + off + i) >> 8) & 0xff);
++		word = buf[i] & 0xff;
++		word = ((word << 8) | off_low);
++		ret = i2c_smbus_write_word_data(client, off_high, word);
++		if (ret < 0) {
++			dev_err(&client->dev, "can't write to 0x%llx\n",
++				(unsigned long long) off + i);
++			mutex_unlock(&data->update_lock);
++			return ret;
++		}
++		mdelay(20);	/* Twr from AT24C32A datasheet*/
++	}
++
++	mutex_unlock(&data->update_lock);
++
++	return count;
++}
++
++static struct bin_attribute kontron_eeep_attr = {
++	.attr = {
++		.name = "kontron_eeep",
++		.mode = 0660,
++	},
++	.read = kontron_eeep_read,
++	.write = kontron_eeep_write,
++};
++
++/* Return 0 if detection is successful, -ENODEV otherwise */
++static int kontron_eeep_detect(struct i2c_client *client, struct i2c_board_info
++			       *info)
++{
++	struct i2c_adapter *adapter = client->adapter;
++
++	if (!(adapter->class & I2C_CLASS_SPD) && client->addr >= 0x51)
++		return -ENODEV;
++
++	/* The EEEP sits on a real I2C interface */
++	if (!i2c_check_functionality(adapter, I2C_FUNC_I2C))
++		return -ENODEV;
++
++	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_READ_BYTE)
++	 && !i2c_check_functionality(adapter, I2C_FUNC_SMBUS_WRITE_BYTE)
++	 && !i2c_check_functionality(adapter, I2C_FUNC_SMBUS_WRITE_BYTE_DATA)
++	 && !i2c_check_functionality(adapter, I2C_FUNC_SMBUS_WRITE_WORD_DATA))
++		return -ENODEV;
++
++	strlcpy(info->type, "kontron_eeep", I2C_NAME_SIZE);
++
++	return 0;
++}
++
++struct ee_blk_hdr {
++	u8	type;
++	int	size;
++};
++
++int ee_blk_read_hdr(struct i2c_client *client, int offset,
++		    struct ee_blk_hdr *hdr)
++{
++	int byte;
++
++	if (i2c_smbus_write_byte_data(client, offset >> 8, offset & 0xff))
++		return -ENODEV;
++
++	byte = i2c_smbus_read_byte(client);
++	if (byte < 0)
++		goto read_error;
++
++	hdr->type = byte & 0xff;
++
++	byte = i2c_smbus_read_byte(client);
++	if (byte < 0)
++		goto read_error;
++
++	hdr->size = (byte & 0xff) << 8;
++	byte = i2c_smbus_read_byte(client);
++	if (byte < 0)
++		goto read_error;
++	hdr->size += byte & 0xff;
++	hdr->size = hdr->size * 2;
++	dev_dbg(&client->dev,
++		"EEPP User block type 0x%02x at offset 0x%04x size %d\n",
++			hdr->type, offset, hdr->size);
++
++	return 0;
++
++read_error:
++	dev_err(&client->dev,
++		"address can't be read eeprom\n");
++	return byte;
++}
++
++int ee_find_usr_blk(struct i2c_client *client, int offset,
++			u16 *ee_usr_start, u16 *ee_usr_end, u16 size)
++{
++	struct ee_blk_hdr blk;
++	u8 eeprom[14];
++	int i, err;
++
++	do {
++		err = ee_blk_read_hdr(client, offset, &blk);
++		if (err < 0)
++			goto read_error;
++
++		/* only block sizes between 6 and 131069 are defined */
++		if (blk.size < 6 || blk.size > 131069) {
++			if (blk.size != 0)
++				dev_err(&client->dev,
++					"Unexpected block size (%d)\n",
++					blk.size);
++			return -ENODEV;
++		}
++
++		if (blk.type == 0xF0) {
++			dev_dbg(&client->dev,
++				"EEEP User found Vendor specific block\n");
++			/* Searching in EEPROM for User Area */
++			for  (i = 0; i < 14 - 3; i++) {
++				int byte = i2c_smbus_read_byte(client);
++
++				if (byte < 0) {
++					err = byte;
++					goto read_error;
++				}
++				eeprom[i] = byte & 0xff;
++			}
++
++			/* Verification block */
++			if (eeprom[0] == 0xb5 &&
++			    eeprom[1] == 0x2c &&
++			    eeprom[3] == '$' &&
++			    eeprom[4] == 'U' &&
++			    eeprom[5] == 'S' &&
++			    eeprom[6] == 'R') {
++				*ee_usr_start = offset + 14;
++				*ee_usr_end = offset + blk.size - 1;
++
++				dev_info(&client->dev,
++					 "EEEP User area version %d.%d\n",
++					 eeprom[7] >> 4, eeprom[7] & 0x0F);
++				return 0;
++			}
++		}
++
++		/* go to next block */
++		offset += blk.size;
++
++	} while ((offset + 14) < size);
++
++	return -ENODEV;
++
++read_error:
++	dev_err(&client->dev,
++		"address 0x%x can't be read\n", i);
++	return err;
++}
++
++
++int ee_find_usr_blk_old(struct i2c_client *client, int offset,
++			u16 *ee_usr_start, u16 *ee_usr_end, u16 size)
++{
++	u8 *eeprom = NULL;
++	int err;
++	int i;
++
++	eeprom = kzalloc(size, GFP_KERNEL);
++	if (!eeprom) {
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	/* Jump to dynamic blocks */
++	/*
++	 * Don't use word wise addressing right now, as there is still a tiny
++	 * chance that this is not a valid EEEP device
++	 */
++	if (i2c_smbus_write_byte_data(client, 0, offset)) {
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++
++	/* Searching in EEPROM for User Area */
++	for  (i = offset; i < size - 16; i++) {
++		int byte = i2c_smbus_read_byte(client);
++
++		if (byte < 0) {
++			dev_err(&client->dev,
++				"address 0x%x can't be read\n", i);
++			err = byte;
++			goto exit_kfree;
++		}
++		eeprom[i] = byte & 0xff;
++	}
++
++	for (i = offset; i < size - 16; i++) {
++		if ((eeprom[i] == 0xf0)
++		    && (eeprom[i+3] == 0x2c)
++		    && (eeprom[i+4] == 0xad)
++		    && (eeprom[i+5] == 0x01)
++		    && (eeprom[i+6] == 0x24)
++		    && (eeprom[i+7] == 0x55)
++		    && (eeprom[i+8] == 0x53)
++		    && (eeprom[i+9] == 0x52)) {
++			*ee_usr_start = i + 0x0e;
++			*ee_usr_end = i + 2 * ((eeprom[i+1]<<8)
++					       | eeprom[i+2]) - 1;
++		}
++	}
++
++	kfree(eeprom);
++	return 0;
++
++exit_kfree:
++	kfree(eeprom);
++exit:
++	return err;
++}
++
++static int kontron_eeep_probe(struct i2c_client *client,
++			const struct i2c_device_id *id)
++{
++	struct kontron_eeep_data *data;
++	int user_area_size;
++	int err;
++	int eeep_spec_rev;
++	int offset;
++	int descriptor;
++	int size;
++
++	data = kzalloc(sizeof(struct kontron_eeep_data), GFP_KERNEL);
++	if (!data) {
++		err = -ENOMEM;
++		goto exit;
++	}
++
++	i2c_set_clientdata(client, data);
++
++	mutex_init(&data->update_lock);
++
++	mutex_lock(&data->update_lock);
++	if (i2c_smbus_write_byte_data(client, 0x0, 0x1)) {
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++	if (i2c_smbus_read_byte(client) != '3') {
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++	if (i2c_smbus_read_byte(client) != 'P') {
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++	eeep_spec_rev = i2c_smbus_read_byte(client);
++	if (eeep_spec_rev < 0) {
++		err = -ENXIO;
++		goto exit_kfree;
++	}
++	dev_info(&client->dev, "EEEP Specification Revision %d\n",
++		eeep_spec_rev);
++
++	offset = i2c_smbus_read_byte(client);
++	if (offset < 0) {
++		err = -ENXIO;
++		goto exit_kfree;
++	}
++	offset *= 2;
++
++	descriptor = i2c_smbus_read_byte(client);
++	if (descriptor < 0) {
++		err = -ENXIO;
++		goto exit_kfree;
++	}
++
++	size = (256 << (descriptor & 0xf));
++	dev_info(&client->dev, "EEPROM Size %d byte\n", size);
++
++	if (!(descriptor & 0x10)) {
++		dev_err(&client->dev,
++			"Standard index EEEPROM is not supported\n");
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++
++	/* 1  - Detect new kontron eeprom structure */
++	err = ee_find_usr_blk(client, offset, &data->u_area_start,
++			      &data->u_area_end, size);
++	if (err < 0) {
++		/* 2 - Try use old kontron eeprom structure */
++		err = ee_find_usr_blk_old(client, offset, &data->u_area_start,
++					  &data->u_area_end, size);
++	}
++
++	mutex_unlock(&data->update_lock);
++
++
++	if (err < 0 || !data->u_area_end) {
++		dev_err(&client->dev, "can't find user area\n");
++		err = -ENODEV;
++		goto exit_kfree;
++	}
++
++	user_area_size = data->u_area_end - data->u_area_start + 1;
++
++
++	dev_info(&client->dev, "EEPROM User area at 0x%x (%d byte)\n",
++		data->u_area_start, user_area_size);
++
++	kontron_eeep_attr.size = user_area_size;
++
++	/* create the sysfs eeprom file */
++	err = sysfs_create_bin_file(&client->dev.kobj,
++				    &kontron_eeep_attr);
++	if (err)
++		goto exit_kfree;
++	/* register a link in kernel/ */
++	if (!link_count++) {
++		err = sysfs_create_link(kernel_kobj, &client->dev.kobj,
++					"kontron_eeep");
++		if (err)
++			goto exit_kfree_1;
++	}
++
++
++	return 0;
++
++exit_kfree_1:
++	sysfs_remove_bin_file(&client->dev.kobj, &kontron_eeep_attr);
++exit_kfree:
++	kfree(data);
++exit:
++	return err;
++}
++
++static int kontron_eeep_remove(struct i2c_client *client)
++{
++	if (link_count--)
++		sysfs_remove_link(kernel_kobj, "kontron_eeep");
++	sysfs_remove_bin_file(&client->dev.kobj, &kontron_eeep_attr);
++	kfree(i2c_get_clientdata(client));
++
++	return 0;
++}
++
++static const struct i2c_device_id kontron_eeep_id[] = {
++	{ "kontron_eeep", 0 },
++	{ }
++};
++
++static struct i2c_driver kontron_eeep_driver = {
++	.driver = {
++		.name	= "kontron_eeep",
++	},
++	.probe		= kontron_eeep_probe,
++	.remove		= kontron_eeep_remove,
++	.id_table	= kontron_eeep_id,
++
++	.class		= I2C_CLASS_SPD,
++	.detect		= kontron_eeep_detect,
++	.address_list	= kontron_normal_i2c,
++};
++
++static int __init kontron_eeep_init(void)
++{
++	return i2c_add_driver(&kontron_eeep_driver);
++}
++
++static void __exit kontron_eeep_exit(void)
++{
++	i2c_del_driver(&kontron_eeep_driver);
++}
++
++module_init(kontron_eeep_init);
++module_exit(kontron_eeep_exit);
++
++MODULE_AUTHOR("Michael Brunner <michael.brunner@kontron.com");
++MODULE_DESCRIPTION("Kontron Embedded EEPROM driver");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("i2c:kontron_eeep");
++MODULE_VERSION("11.0");
+diff --git a/drivers/misc/kontron_bootcounter.c b/drivers/misc/kontron_bootcounter.c
+new file mode 100644
+index 0000000000000..22b1af0b612e7
+--- /dev/null
++++ b/drivers/misc/kontron_bootcounter.c
+@@ -0,0 +1,266 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * kontron_bootcounter.c - Bootcounter driver for Kontron Modules
++ *
++ * Based on chr2_bootcounter driver.
++ * Author: Viktor Krasnov <vkrasnov@dev@rtsoft.ru>
++ *
++ * Copyright (C) 2011-2014 Kontron Europe GmbH
++ * Author: Michael Brunner <michael.brunner@kontron.com>
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/mutex.h>
++#include <linux/dmi.h>
++
++#define KONTRON_DMI_ENTRY_SIZE	28
++#define KONTRON_BC_SIZE		4
++
++static unsigned int bootcount;
++
++static const struct dmi_system_id kontron_bc_dmi_table[] = {
++	{
++		.ident = "COME",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-"),
++		},
++	},
++	{
++		.ident = "SMARC",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "SMARC-"),
++		},
++	},
++	{
++		.ident = "BBD6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBD6"),
++		},
++	},
++	{
++		.ident = "BBD7",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBD7"),
++		},
++	},
++	{
++		.ident = "BBL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBL6"),
++		},
++	},
++	{
++		.ident = "BCL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bCL6"),
++		},
++	},
++	{
++		.ident = "BDV7",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bDV7"),
++		},
++	},
++	{
++		.ident = "BHL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bHL6"),
++		},
++	},
++	{
++		.ident = "BSL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bSL6"),
++		},
++	},
++	{
++		.ident = "BKL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bKL6"),
++		},
++	},
++	{
++		.ident = "CAL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cAL"),
++		},
++	},
++	{
++		.ident = "CVR6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cVR6"),
++		},
++	},
++	{
++		.ident = "CVV6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBT"),
++		},
++	},
++	{
++		.ident = "CBL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBL6"),
++		},
++	},
++	{
++		.ident = "CBW6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBW6"),
++		},
++	},
++	{
++		.ident = "CHL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cHL6"),
++		},
++	},
++	{
++		.ident = "CSL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cSL6"),
++		},
++	},
++	{
++		.ident = "CKL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cKL6"),
++		},
++	},
++	{
++		.ident = "MAL1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-mAL"),
++		},
++	},
++	{
++		.ident = "MVV1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-mBT"),
++		},
++	},
++	{ }
++};
++
++static void type_bc_dmi_decode(const struct dmi_header *header, void *dummy)
++{
++
++	if (header->type != 161)
++		return;
++
++	if (header->length == KONTRON_DMI_ENTRY_SIZE)
++		memcpy(dummy, header, KONTRON_DMI_ENTRY_SIZE);
++	else
++		memset(dummy, 0x00, KONTRON_DMI_ENTRY_SIZE);
++}
++
++static ssize_t count_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return sprintf(buf, "%u\n", bootcount);
++}
++
++static DEVICE_ATTR(count, 0444, count_show, NULL);
++
++static int kontron_bc_probe(struct platform_device *pdev)
++{
++	int err, i;
++	unsigned char kontron_dmi_entry[KONTRON_DMI_ENTRY_SIZE];
++
++	if (!dmi_check_system(kontron_bc_dmi_table))
++		return -ENODEV;
++
++
++	dmi_walk(type_bc_dmi_decode, kontron_dmi_entry);
++	for (i = 0; i < KONTRON_BC_SIZE; i++) {
++		bootcount = bootcount << 8;
++		bootcount  += kontron_dmi_entry[16+i];
++	}
++
++	if (bootcount > 0) {
++		dev_info(&pdev->dev, "Boot count: %u\n", bootcount);
++	} else {
++		dev_err(&pdev->dev, "Unable to get boot count\n");
++		return -ENODEV;
++	}
++
++	err = device_create_file(&pdev->dev, &dev_attr_count);
++	if (err)
++		return err;
++
++	return 0;
++}
++
++static int kontron_bc_remove(struct platform_device *pdev)
++{
++	device_remove_file(&pdev->dev, &dev_attr_count);
++
++	return 0;
++}
++
++static struct platform_driver kontron_bc_driver = {
++	.probe		= kontron_bc_probe,
++	.remove		= kontron_bc_remove,
++	.driver		= {
++		.name	= "kontron-bootcounter",
++		.owner  = THIS_MODULE,
++	},
++};
++
++static struct platform_device *kontron_bc_device;
++
++static int __init kontron_bc_init(void)
++{
++	int ret;
++
++	ret = platform_driver_register(&kontron_bc_driver);
++	if (ret)
++		return ret;
++	kontron_bc_device =
++		platform_device_register_simple("kontron-bootcounter", -1,
++						NULL, 0);
++
++	if (IS_ERR(kontron_bc_device)) {
++		platform_driver_unregister(&kontron_bc_driver);
++		return PTR_ERR(kontron_bc_device);
++	}
++	return 0;
++}
++
++static void __exit kontron_bc_exit(void)
++{
++	platform_device_unregister(kontron_bc_device);
++	platform_driver_unregister(&kontron_bc_driver);
++}
++
++module_init(kontron_bc_init);
++module_exit(kontron_bc_exit);
++
++MODULE_AUTHOR("Michael Brunner <michael.brunner@kontron.com>");
++MODULE_DESCRIPTION("Kontron Bootcounter Driver");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("platform:kontron_bootcounter");
++MODULE_VERSION("11.0");
+diff --git a/drivers/video/backlight/Kconfig b/drivers/video/backlight/Kconfig
+index 40676be2e46aa..7ea07e9bd4199 100644
+--- a/drivers/video/backlight/Kconfig
++++ b/drivers/video/backlight/Kconfig
+@@ -350,6 +350,22 @@ config BACKLIGHT_PCF50633
+ 	  If you have a backlight driven by a NXP PCF50633 MFD, say Y here to
+ 	  enable its driver.
+ 
++config BACKLIGHT_KONTRON
++	tristate "Kontron Universal Backlight driver for Kontron KAB-ADAPT-LVDS"
++	depends on BACKLIGHT_CLASS_DEVICE && I2C
++	help
++	  Driver supports KAB-ADAPT-LVDS adapter and PWM control for the
++	  following Kontron boards: COMe-cBT6, COMe-mTT1 (nanoETXexpress-TT),
++	  COMe-mBT10, COMe-cCT6, COMe-mCT10, COMe-cHL6 and COMe-bHL6.
++	  For COMe-bBL6, COMe-bCL6, COMe-bKL6, COMe-bSL6, COMe-cAL6,
++	  COMe-cBW6, COMe-cBL6, COMe-cKL6, COMe-cSL6, COMe-cVR6 and COMe-mAL1
++	  only support for the KAB-ADAPT-LVDS adapter is provided by this
++	  driver, PWM support is provided by the i915 driver in that case.
++	  If you have one of these boards and a backlight driven by
++	  a KAB-ADAPT-LVDS or through PWM control, say Y here to enable its
++	  driver. To compile this driver as a module, choose M here: the module
++	  will be called ku_backlight.
++
+ config BACKLIGHT_AAT2870
+ 	tristate "AnalogicTech AAT2870 Backlight"
+ 	depends on MFD_AAT2870_CORE
+diff --git a/drivers/video/backlight/Makefile b/drivers/video/backlight/Makefile
+index 63c507c07437d..67d0ead975942 100644
+--- a/drivers/video/backlight/Makefile
++++ b/drivers/video/backlight/Makefile
+@@ -18,6 +18,7 @@ obj-$(CONFIG_LCD_TDO24M)		+= tdo24m.o
+ obj-$(CONFIG_LCD_TOSA)			+= tosa_lcd.o
+ obj-$(CONFIG_LCD_VGG2432A4)		+= vgg2432a4.o
+ 
++obj-$(CONFIG_BACKLIGHT_KONTRON)		+= kontron_bl.o
+ obj-$(CONFIG_BACKLIGHT_88PM860X)	+= 88pm860x_bl.o
+ obj-$(CONFIG_BACKLIGHT_AAT2870)		+= aat2870_bl.o
+ obj-$(CONFIG_BACKLIGHT_ADP5520)		+= adp5520_bl.o
+diff --git a/drivers/video/backlight/kontron_bl.c b/drivers/video/backlight/kontron_bl.c
+new file mode 100644
+index 0000000000000..6a40c8ff19d7c
+--- /dev/null
++++ b/drivers/video/backlight/kontron_bl.c
+@@ -0,0 +1,713 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ *  kontron_bl.c - Kontron Universal Backlight Driver.
++ *  Based on driver for Sharp SL-6000x
++ *
++ *  Driver supports KAB-ADAPT-LVDS adapter and PWM control for various Kontron
++ *  boards
++ *
++ *  Copyright (c) 2012-2013 Kontron
++ *  Author: Viktor Krasnov <vkrasnov@dev.rtsoft.ru>
++ *          Andrey Rusalin <arusalin@dev.rtsot.ru>
++ *
++ *  Copyright (c) 2013-2014 Kontron Europe GmbH
++ *  Michael Brunner <michael.brunner@kontron.com>
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/mutex.h>
++#include <linux/fb.h>
++#include <linux/backlight.h>
++#include <linux/dmi.h>
++#include <linux/i2c.h>
++#include <linux/platform_device.h>
++#include <linux/pci.h>
++
++#define KU_MAX_BACKLIGHT	100
++#define DRV_PFX			"ku_backlight: "
++#define PWM_INIT_ERROR		"Initializing of backlight PWM control\n"
++#define BLC_PWM_CTL2_OFFSET	0x61250
++#define BLC_PWM_CTL_OFFSET	0x61254
++#define MMADR_OFFSET		0x10
++
++#define BACKLIGHT_INFO_DMI_DEV_TYPE 162
++
++enum devices { ku_i2c_backlight, ku_i2c_backlight_ext };
++
++/*
++ * If force is set to anything different from 0, we forcibly enable the
++ * backlight. DANGEROUS!
++ */
++static int force_bl_type;
++module_param(force_bl_type, int, 0444);
++MODULE_PARM_DESC(force_bl_type, "Forcibly selecting backlight mode");
++
++static bool enable_ext_bl;
++module_param(enable_ext_bl, bool, 0444);
++MODULE_PARM_DESC(enable_ext_bl, "Enable ext backlight support");
++
++static const struct dmi_system_id supported_boards_dmi_table[] = {
++	{
++		.ident = "COME",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-"),
++		},
++	},
++	{
++		.ident = "SMARC",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "SMARC-"),
++		},
++	},
++	{
++		.ident = "BBL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bBL6"),
++		},
++	},
++	{
++		.ident = "BCL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bCL6"),
++		},
++	},
++	{
++		.ident = "BKL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bKL6"),
++		},
++	},
++	{
++		.ident = "BSL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bSL6"),
++		},
++	},
++	{
++		.ident = "CAL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cAL"),
++		},
++	},
++	{
++		.ident = "CBL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBL6"),
++		},
++	},
++	{
++		.ident = "CBW6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBW6"),
++		},
++	},
++	{
++		.ident = "CKL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cKL6"),
++		},
++	},
++	{
++		.ident = "CVR6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cVR6"),
++		},
++	},
++	{
++		.ident = "CVV6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cBT"),
++		},
++	},
++	{
++		.ident = "MAL1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-mAL"),
++		},
++	},
++	{
++		.ident = "MVV1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-mBT"),
++		},
++	},
++	{
++		.ident = "NTC1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "nanoETXexpress-TT"),
++		},
++	},
++	{
++		.ident = "NTC1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "nETXe-TT"),
++		},
++	},
++	{
++		.ident = "UUP6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cCT6"),
++		},
++	},
++	{
++		.ident = "NUP1",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-mCT10"),
++		},
++	},
++	{
++		.ident = "BHL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-bHL6"),
++		},
++	},
++	{
++		.ident = "CHL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cHL6"),
++		},
++	},
++	{
++		.ident = "CSL6",
++		.matches = {
++			DMI_MATCH(DMI_BOARD_VENDOR, "Kontron"),
++			DMI_MATCH(DMI_BOARD_NAME, "COMe-cSL6"),
++		},
++	},
++	{}
++};
++
++static int ku_bl_i2c_registered[] = {
++	[ku_i2c_backlight] = 0,
++	[ku_i2c_backlight_ext] = 0,
++};
++
++unsigned int ku_bl_pci_devices[] = {
++	0x416, /* Haswell GFX */
++	0xBE2, /* Cedarview GFX */
++	0x4108, /* Tunnel Creek GFX */
++	/*
++	 * Devices not supported here should be supported directly by a native
++	 * driver (e.g. intel_backlight), the graphics driver or ACPI.
++	 */
++};
++
++static const unsigned short normal_i2c[] = { 0x31, I2C_CLIENT_END };
++
++enum bltype {
++	bltype_none = 0,
++	bltype_pwm = 1,
++	bltype_i2c = 2,
++	bltype_pwm_inv = 5,
++	bltype_i2c_inv = 6
++};
++
++struct ku_bl_data {
++	struct i2c_client *i2c;
++	struct platform_device *pdev;
++	struct backlight_device *bl;
++	u8 backlight_type;
++	/*next 3 fields is needed for pwm backlight */
++	struct pci_dev *pci_dev;
++	void __iomem *pwm_ctl_addr;	/*iomapped PWM_CTL address */
++	u32 pwm_high;		/*pwm frequency */
++};
++
++static void
++ku_bl_i2c_set_backlight(struct ku_bl_data *data, int brightness)
++{
++	struct i2c_client *i2c = data->i2c;
++	/*send backlight value to DAC */
++	i2c_smbus_write_byte(i2c, brightness & 0xff);
++}
++
++static void
++ku_bl_pwm_set_backlight(struct ku_bl_data *data, int brightness)
++{
++	/*calculate pwm value and write it */
++	/*u32 pwm_val = ((data->pwm_high >> 16) * (0xFF - brightness)) / 0xFF;*/
++	u32 pwm_val = ((data->pwm_high >> 16) * brightness) / 0xFF;
++
++	iowrite32(data->pwm_high | pwm_val, data->pwm_ctl_addr);
++}
++
++static int
++ku_bl_update_status(struct backlight_device *dev)
++{
++	struct backlight_properties *props = &dev->props;
++	struct ku_bl_data *data = dev_get_drvdata(&dev->dev);
++	int brightness = props->brightness;
++
++	if ((data->backlight_type == bltype_i2c_inv)
++	    || (data->backlight_type == bltype_pwm_inv))
++		brightness = 255 - (brightness * 255) / 100;
++	else
++		brightness = (brightness * 255) / 100;
++
++	if ((data->backlight_type == bltype_i2c)
++	    || (data->backlight_type == bltype_i2c_inv))
++		ku_bl_i2c_set_backlight(data, brightness);
++	else
++		ku_bl_pwm_set_backlight(data, brightness);
++
++	return 0;
++}
++
++static int
++ku_bl_get_brightness(struct backlight_device *dev)
++{
++	struct backlight_properties *props = &dev->props;
++
++	return props->brightness;
++}
++
++static const struct backlight_ops ku_bl_ops = {
++	.get_brightness = ku_bl_get_brightness,
++	.update_status = ku_bl_update_status,
++};
++
++#ifdef CONFIG_PM_SLEEP
++static int
++ku_bl_i2c_suspend(struct device *dev)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct ku_bl_data *data = i2c_get_clientdata(client);
++
++	ku_bl_i2c_set_backlight(data, 0);
++
++	return 0;
++}
++
++static int
++ku_bl_i2c_resume(struct device *dev)
++{
++	struct i2c_client *client = to_i2c_client(dev);
++	struct ku_bl_data *data = i2c_get_clientdata(client);
++
++	ku_bl_update_status(data->bl);
++
++	return 0;
++}
++
++static int
++ku_bl_pwm_suspend(struct device *dev)
++{
++	struct backlight_device *bl = dev_get_drvdata(dev);
++	struct ku_bl_data *data = bl_get_data(bl);
++
++	ku_bl_pwm_set_backlight(data, 0);
++
++	return 0;
++}
++
++static int
++ku_bl_pwm_resume(struct device *dev)
++{
++	struct backlight_device *bl = dev_get_drvdata(dev);
++	struct ku_bl_data *data = bl_get_data(bl);
++
++	ku_bl_update_status(data->bl);
++
++	return 0;
++}
++#endif
++
++static const struct dev_pm_ops ku_bl_i2c_pm_ops = {
++#ifdef CONFIG_PM_SLEEP
++	.suspend = ku_bl_i2c_suspend,
++	.resume = ku_bl_i2c_resume,
++	.poweroff = ku_bl_i2c_suspend,
++	.restore = ku_bl_i2c_resume,
++#endif
++};
++
++static const struct dev_pm_ops ku_bl_pwm_pm_ops = {
++#ifdef CONFIG_PM_SLEEP
++	.suspend = ku_bl_pwm_suspend,
++	.resume = ku_bl_pwm_resume,
++	.poweroff = ku_bl_pwm_suspend,
++	.restore = ku_bl_pwm_resume,
++#endif
++};
++
++static int
++ku_bl_i2c_detect(struct i2c_client *client, struct i2c_board_info *info)
++{
++	struct i2c_adapter *adapter = client->adapter;
++	int address = client->addr;
++	const char *name = NULL;
++
++	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_WRITE_BYTE))
++		return -ENODEV;
++
++	if (strcmp(adapter->name, "dmdc") == 0)
++		return -ENODEV;
++
++	if ((address == 0x31) &&
++	    ((strcmp(adapter->name, "i915 gmbus panel") == 0)
++	     || (strcmp(adapter->name, "intel drm LVDSDDC_C") == 0)
++	     || ((strncmp(adapter->name, "i2c-", 3) == 0) &&
++		 ((strstr(adapter->name, "-mux(chan_id 1)") == 0)
++		  || (strstr(adapter->name, "-mux (chan_id 1)") == 0))))) {
++		name = "i2c_backlight";
++		dev_info(&client->adapter->dev,
++			 "I2C backlight device found on %s at 0x%02x\n",
++			 adapter->name, address);
++	} else if ((address == 0x31) &&
++	    ((strcmp(adapter->name, "DPDDC-B") == 0) ||
++	     (strcmp(adapter->name, "DPDDC-C") == 0) ||
++	     (strcmp(adapter->name, "DPDDC-D") == 0))) {
++		if (!enable_ext_bl) {
++			dev_info(&client->adapter->dev,
++				 "Ext. backlight device on %s at 0x%02x ignored\n",
++				 adapter->name, address);
++			return -ENODEV;
++		}
++		dev_info(&client->adapter->dev,
++			 "Ext. I2C backlight device found on %s at 0x%02x\n",
++			 adapter->name, address);
++		name = "i2c_backlight_ext";
++	} else {
++		dev_info(&client->adapter->dev,
++			 "Unsupported chip on %s at 0x%02x\n",
++			 adapter->name, address);
++		return -ENODEV;
++	}
++
++	strlcpy(info->type, name, I2C_NAME_SIZE);
++
++	return 0;
++}
++
++struct dmi_backlight_found {
++	u8 type;
++	u8 brightness;
++	int found;
++};
++
++void
++dmi_decode_backlight_info(const struct dmi_header *dmih, void *pdata)
++{
++	struct dmi_backlight_found *dmi_bl_found = pdata;
++
++	struct dmi_kem_backlight_info {
++		const struct dmi_header header;
++		u8 kemid[4];
++		u8 struct_rev;
++		u8 backlight_type;
++		u8 backlight_value;
++		u8 reserved;
++		u32 pwm_freq;
++	} *dmi_bl_inf;
++
++	if (dmih->type == BACKLIGHT_INFO_DMI_DEV_TYPE) {
++		dmi_bl_inf = (struct dmi_kem_backlight_info *) dmih;
++		dmi_bl_found->type = dmi_bl_inf->backlight_type;
++		dmi_bl_found->found = 1;
++		if (dmi_bl_inf->backlight_type == bltype_i2c
++		    || dmi_bl_inf->backlight_type == bltype_pwm) {
++			dmi_bl_found->brightness = dmi_bl_inf->backlight_value;
++			dmi_bl_found->found = 1;
++		} else if (dmi_bl_inf->backlight_type == bltype_i2c_inv
++			   || dmi_bl_inf->backlight_type == bltype_pwm_inv) {
++			dmi_bl_found->brightness =
++			    255 - dmi_bl_inf->backlight_value;
++			dmi_bl_found->found = 1;
++		}
++	}
++}
++
++static int ku_bl_i2c_probe(struct i2c_client *client,
++		       const struct i2c_device_id *id)
++{
++	struct dmi_backlight_found dmi_bl_found = {0};
++	struct backlight_properties props;
++	struct ku_bl_data *data;
++	int bl_device_id;
++	char *devname;
++	int ret;
++
++	if (id->driver_data == ku_i2c_backlight) {
++		devname = "ku_backlight";
++		bl_device_id = ku_i2c_backlight;
++	} else {
++		devname = "ku_backlight_ext";
++		bl_device_id = ku_i2c_backlight_ext;
++	}
++
++	if (ku_bl_i2c_registered[bl_device_id]) {
++		dev_warn(&client->dev, "Device name %s already registered\n",
++			 devname);
++		return -EEXIST;
++	}
++
++	data = kzalloc(sizeof(struct ku_bl_data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	i2c_set_clientdata(client, data);
++	data->i2c = client;
++
++	memset(&props, 0, sizeof(struct backlight_properties));
++	props.max_brightness = KU_MAX_BACKLIGHT;
++	props.type = BACKLIGHT_RAW;
++
++	data->bl = backlight_device_register(devname, &client->dev, data,
++					     &ku_bl_ops, &props);
++	if (IS_ERR(data->bl))
++		return PTR_ERR(data->bl);
++
++	ku_bl_i2c_registered[bl_device_id] = 1;
++
++	data->backlight_type = force_bl_type;
++	ret = dmi_walk(dmi_decode_backlight_info, &dmi_bl_found);
++	if (ret)
++		dev_err(&client->dev, "unable to walk DMI table\n");
++
++	if (dmi_bl_found.found)
++		data->bl->props.brightness =
++		    (dmi_bl_found.brightness * 100) / 255;
++	else
++		data->bl->props.brightness = KU_MAX_BACKLIGHT;
++
++	ku_bl_update_status(data->bl);
++
++	dev_info(&client->dev, "Registered I2C backlight device");
++
++	return 0;
++}
++
++static int ku_bl_i2c_remove(struct i2c_client *client)
++{
++	struct ku_bl_data *data = i2c_get_clientdata(client);
++
++	backlight_device_unregister(data->bl);
++	data->bl = NULL;
++
++	kfree(data);
++
++	return 0;
++}
++
++static const struct i2c_device_id ku_bl_i2c_id[] = {
++	{"i2c_backlight", ku_i2c_backlight},
++	{"i2c_backlight_ext", ku_i2c_backlight_ext},
++	{},
++};
++
++MODULE_DEVICE_TABLE(i2c, ku_bl_i2c_id);
++
++static struct i2c_driver ku_bl_i2c_driver = {
++	.class = I2C_CLASS_DDC,
++	.driver = {
++		   .name = "ku_i2c_backlight",
++		   .owner = THIS_MODULE,
++		   .pm = &ku_bl_i2c_pm_ops,
++		   },
++	.probe = ku_bl_i2c_probe,
++	.remove = ku_bl_i2c_remove,
++	.id_table = ku_bl_i2c_id,
++	.detect = ku_bl_i2c_detect,
++	.address_list = normal_i2c,
++};
++
++static int
++ku_bl_pwm_probe(struct platform_device *pdev)
++{
++	struct backlight_properties props;
++	struct dmi_backlight_found dmi_bl_found;
++	u32 mmadr, temp_val;
++	void __iomem *pwm_ctl2_addr;
++	int ret;
++	struct ku_bl_data *data;
++	unsigned int id;
++
++	data = kzalloc(sizeof(struct ku_bl_data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	platform_set_drvdata(pdev, data);
++	data->pdev = pdev;
++
++	/*trying to initialize pwm backlight control */
++	/*search pci dev, Intel CedarView GFX */
++	for (id = 0; id < ARRAY_SIZE(ku_bl_pci_devices); id++) {
++		data->pci_dev = pci_get_device(PCI_VENDOR_ID_INTEL,
++					       ku_bl_pci_devices[id], NULL);
++		if (data->pci_dev)
++			break;
++	}
++	if (!data->pci_dev) {
++		dev_warn(&data->pdev->dev, "Not supported for this device\n");
++		goto exit0;
++	} else {
++		ret =
++		    pci_read_config_dword(data->pci_dev, MMADR_OFFSET, &mmadr);
++		if (ret)
++			goto exit1;
++		else {
++			data->pwm_ctl_addr =
++			    ioremap(mmadr + BLC_PWM_CTL_OFFSET, sizeof(u32));
++			pwm_ctl2_addr =
++			    ioremap(mmadr + BLC_PWM_CTL2_OFFSET, sizeof(u32));
++			if (!data->pwm_ctl_addr || !pwm_ctl2_addr) {
++				iounmap(data->pwm_ctl_addr);
++				iounmap(pwm_ctl2_addr);
++				goto exit1;
++			} else {
++				temp_val = ioread32(pwm_ctl2_addr);
++				iowrite32((temp_val & 0xBFFFFFFF) | 0xA0000000,
++					  pwm_ctl2_addr);
++				temp_val = ioread32(data->pwm_ctl_addr);
++				data->pwm_high = temp_val & 0xFFFF0000;
++			}
++		}
++	}
++
++	memset(&props, 0, sizeof(struct backlight_properties));
++	props.max_brightness = KU_MAX_BACKLIGHT;
++	props.type = BACKLIGHT_RAW;
++	data->bl = backlight_device_register("ku_pwm_backlight", &pdev->dev,
++					     data, &ku_bl_ops, &props);
++	if (IS_ERR(data->bl))
++		goto exit1;
++
++	data->backlight_type = force_bl_type;
++	dmi_walk(dmi_decode_backlight_info, &dmi_bl_found);
++	if (dmi_bl_found.found)
++		data->bl->props.brightness =
++		    (dmi_bl_found.brightness * 100) / 255;
++	else
++		data->bl->props.brightness = KU_MAX_BACKLIGHT;
++
++	ku_bl_update_status(data->bl);
++
++	dev_info(&pdev->dev, "Registered PWM backlight device");
++
++	return 0;
++
++exit1:
++	pci_dev_put(data->pci_dev);
++exit0:
++	kfree(data);
++	dev_warn(&pdev->dev, PWM_INIT_ERROR);
++	return -ENODEV;
++}
++
++static int
++ku_bl_pwm_remove(struct platform_device *pdev)
++{
++	struct ku_bl_data *data = platform_get_drvdata(pdev);
++
++	backlight_device_unregister(data->bl);
++	data->bl = NULL;
++	iounmap(data->pwm_ctl_addr);
++	pci_dev_put(data->pci_dev);
++	kfree(data);
++
++	return 0;
++}
++
++static struct platform_driver ku_bl_pwm_driver = {
++	.probe = ku_bl_pwm_probe,
++	.remove = ku_bl_pwm_remove,
++	.driver = {
++		   .owner = THIS_MODULE,
++		   .name = "ku_pwm_backlight",
++		   .pm = &ku_bl_pwm_pm_ops,
++		   },
++};
++
++static struct platform_device *ku_backlight_dev;
++
++static int __init ku_bl_init(void)
++{
++	int ret;
++
++	struct dmi_backlight_found dmi_bl_found = {0};
++
++	if (!dmi_check_system(supported_boards_dmi_table)) {
++		if (force_bl_type != 0)
++			pr_warn(DRV_PFX
++				"No device detected - forcing driver load!");
++		else
++			return -ENODEV;
++	}
++
++	if (force_bl_type == 0) {
++		ret = dmi_walk(dmi_decode_backlight_info, &dmi_bl_found);
++		if (ret) {
++			pr_err(DRV_PFX "unable to walk DMI table\n");
++			return -ENXIO;
++		}
++		if (dmi_bl_found.found)
++			force_bl_type = dmi_bl_found.type;
++		else
++			return -ENODEV;
++	}
++
++	if ((force_bl_type == bltype_i2c)
++	    || (force_bl_type == bltype_i2c_inv)) {
++		return i2c_add_driver(&ku_bl_i2c_driver);
++	} else if ((force_bl_type == bltype_pwm)
++		 || (force_bl_type == bltype_pwm_inv)) {
++		ret = platform_driver_register(&ku_bl_pwm_driver);
++		if (ret)
++			return ret;
++
++		ku_backlight_dev =
++		    platform_device_register_simple("ku_pwm_backlight", -1,
++						    NULL, 0);
++		if (IS_ERR(ku_backlight_dev)) {
++			platform_driver_unregister(&ku_bl_pwm_driver);
++			return PTR_ERR(ku_backlight_dev);
++		}
++		return 0;
++	}
++
++	return -ENODEV;
++}
++
++static void __exit ku_bl_exit(void)
++{
++	if ((force_bl_type == bltype_i2c)
++	    || (force_bl_type == bltype_i2c_inv)) {
++		i2c_del_driver(&ku_bl_i2c_driver);
++	} else if ((force_bl_type == bltype_pwm)
++		 || (force_bl_type == bltype_pwm_inv)) {
++		platform_device_unregister(ku_backlight_dev);
++		platform_driver_unregister(&ku_bl_pwm_driver);
++	}
++}
++
++module_init(ku_bl_init);
++module_exit(ku_bl_exit);
++
++MODULE_AUTHOR("Viktor Krasnov <vkrasnov@dev.rtsoft.ru>");
++MODULE_DESCRIPTION("Kontron Universal Backlight Driver");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("backlight:ku_backlight");
++MODULE_ALIAS("backlight:kontron_bl");
++MODULE_VERSION("11.0");
+-- 
+2.25.1
+

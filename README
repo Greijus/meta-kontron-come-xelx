@@ -1,0 +1,288 @@
+This README file contains information on building the meta-kontron-come-xelx
+BSP layer, and booting the images contained in the build directory. Please see
+the corresponding sections below for details.
+
+The BSP is made for Kontron COMe Modules - particularly this version has been
+optimized and tested on systems with the Intel Atom® x6000E, Pentium® and
+Celeron® Seriesprocessor like the COMe-mEL10 and COMe-cEL6.
+
+We try to include some kind of compatibility with other COMe products where
+possible. Therefore also patches and kernel drivers might be included that are
+not absolutely necessary for for the product it is released for. This should
+allow a smoth migration path between different module products.
+
+Further information about available Kontron COMe products can be found here:
+
+  https://www.kontron.com/products/boards-and-standard-form-factors/com-express/
+
+Information on all Kontron products can be found here:
+
+  http://www.kontron.com/products/
+
+
+Compliance
+==========
+
+No steps have been taken to make this BSP compliant with the Yocto Project
+requirements, which are listed here:
+
+  https://www.yoctoproject.org/webform/yocto-project-compatible-registration
+
+
+Dependencies
+============
+
+This layer depends on:
+
+  URI: git://git.openembedded.org/bitbake
+  branch: dunfell
+
+  URI: git://git.yoctoproject.org/poky.git
+  branch: dunfell
+
+  URI: git://git.openembedded.org/openembedded-core
+  layers: meta
+  branch: dunfell
+
+  URI: git://git.yoctoproject.org/meta-intel
+  layers: intel
+  branch: dunfell
+
+
+Table of Contents
+=================
+
+   I. Layer description
+  II. Building the meta-kontron-come-xelx BSP layer
+ III. Booting the BSP live images
+  IV. Installation to persistent storage
+
+I. Layer description
+====================
+
+This layer is based:
+
+ - on the Intel common BSP layer
+
+ - on the OpenEmbedded Layer
+
+ - on the latest meta-kontron BSP layer, which is provided along with this
+   layer.
+
+a. Additional kernel drivers and userspace fixes:
+
+ - Add a KEM PLD driver for CPLD functionality support;
+ - Add a Kontron EEPROM driver;
+ - Add a Kontron bootcounter driver;
+ - Enable in kernel following drivers and features:
+    * NCT7802 HWMon sensor;
+    * ACPI (i2c-scmi) SMBus drivers;
+    * Hibernation to disk(S4) feature;
+    * TPM2.0 driver;
+    * 'powersave' and 'userspace' cpufreq governors;
+ - Disable iTCO watchdog and i801 SMBus drivers.
+
+b. KEAPIv3 support:
+
+The KEAPI library provides unified interface to hardware drivers and
+OS-independent API to get platform information. KEAPI is distributed as source
+code with the code available from github:
+
+  https://github.com/kontron/keapi
+
+c. Multilib support:
+
+By default only 64-bit set of system C library is included into the final
+bootable BSP image. The support of x86 architecture(32-bit libraries) can be
+enabled to by adding or uncommenting out the following lines in
+meta-kontron-come-xelx/conf/machine/kontron-come-xelx.conf :
+
+ require conf/multilib.conf
+ MULTILIBS = "multilib:lib32"
+ DEFAULTTUNE_virtclass-multilib-lib32 = "x86"
+
+Additional 32-bit libraries and utilities can be integrated into bootable BSP
+images by adding them to local.conf, e.g.:
+
+  IMAGE_INSTALL_append = " lib32-libstdc++"
+
+For additional information about multilib support, please refer to:
+
+  https://www.yoctoproject.org/docs/3.1/dev-manual/dev-manual.html#combining-multiple-versions-library-files-into-one-image
+
+II. Building the meta-kontron-come-xelx BSP layer
+=================================================
+
+a. Download Yocto release 3.1:
+
+  wget http://git.yoctoproject.org/cgit/cgit.cgi/poky/snapshot/poky-yocto-3.1.9.tar.bz2
+
+b. Download Intel® Common Core BSP
+
+  wget http://git.yoctoproject.org/cgit/cgit.cgi/meta-intel/snapshot/meta-intel-dunfell.tar.bz2
+
+c. Unpack Yocto poky tarball:
+
+  tar xf poky-yocto-3.1.9.tar.bz2
+
+d. Go to poky directory and unpack other layers tarballs. Use following
+   commands for example:
+
+  cd poky-yocto-3.1.9
+  tar xf ../meta-intel-dunfell.tar.bz2
+  tar xf ../yocto-bsp-*/meta-kontron-come-xelx_dunfell-23.0.9.tar.bz2
+  tar xf ../yocto-bsp-*/meta-kontron_dunfell-23.0.9.tar.bz2
+
+e. Get collection of OpenEmbedded and security layers:
+
+  git clone git://git.openembedded.org/meta-openembedded -b dunfell
+  git clone https://git.yoctoproject.org/git/meta-security -b dunfell
+
+f. Rename the folder with unpacked "Intel® Common Core BSP" to "meta-intel":
+
+  mv meta-intel-dunfell meta-intel
+
+g. Run oe-init-build-env script:
+
+  source oe-init-build-env
+
+  If available, instead also the sample configuration can be used. In this case
+  the steps h to k can be skipped for a default image configuration.
+
+  TEMPLATECONF=meta-kontron-come-xelx/conf/ source oe-init-build-env
+
+h. Then change MACHINE to "kontron-come-xelx" in conf/local.conf:
+
+  MACHINE = "kontron-come-xelx"
+
+i. Add paths to meta-intel and meta-kontron-come-xelx layers to
+conf/bblayers.conf. Corresponding section of the file should look like this:
+
+  BBLAYERS ?= " \
+    /full/path/to/poky/meta \
+    /full/path/to/poky/meta-poky \
+    /full/path/to/poky/meta-yocto-bsp \
+    /full/path/to/poky/meta-openembedded/meta-filesystems \
+    /full/path/to/poky/meta-openembedded/meta-gnome \
+    /full/path/to/poky/meta-openembedded/meta-multimedia \
+    /full/path/to/poky/meta-openembedded/meta-networking \
+    /full/path/to/poky/meta-openembedded/meta-oe \
+    /full/path/to/poky/meta-openembedded/meta-perl \
+    /full/path/to/poky/meta-openembedded/meta-python \
+    /full/path/to/poky/meta-openembedded/meta-security \
+    /full/path/to/poky/meta-openembedded/meta-xfce \
+    /full/path/to/poky/meta-intel \
+    /full/path/to/poky/meta-kontron \
+    /full/path/to/poky/meta-kontron-come-xelx \
+    "
+
+j. To integrate a hardware video acceleration via gstreamer into the bootable
+images, add a "commercial" license to LICENSE_FLAGS_WHITELIST in
+conf/local.conf:
+
+  LICENSE_FLAGS_WHITELIST = " commercial"
+
+The reason this is needed is to prevent the image from including anything that
+might violate the license terms of the packages used to implement the video
+acceleration feature, such as gst-ffmpeg and ffmpeg. As always, please consult
+the licenses included in the specific packages for details.
+
+k. Run image build (it's possible to build kontron-test-image,
+   kontron-test-image-data, core-image-sato or some other image):
+
+  bitbake kontron-test-image
+
+For the kontron-test-image with a full partition table and a small data
+partition this can be used:
+
+  bitbake kontron-test-image-data
+
+NOTE: With this recipe a WIC image will be created, that can be handled in the
+same way as the hddimg that is created with the kontron-test-image recipe.
+
+###############################################################################
+# WARNING: The kontron-test-image is for product evaluation and testing!      #
+#          It does not incorporate any security features and is accessible    #
+#          through the network, graphical interface and serial console as     #
+#          root without password.                                             #
+#          Never use this image in an untrusted environment!                  #
+###############################################################################
+
+
+III. Installing and booting the BSP live images
+===============================================
+
+The image created using the previous steps can be found in the following
+directory:
+
+  build/tmp/deploy/images
+
+A pre-built version of the image for particular BSP should be also available
+separately on the Kontron customer section:
+
+  https://emdcustomersection.kontron.com
+
+The image can be deployed to a mass storage device like a SATA disk, a USB
+stick or a SD card.
+
+For example a hard drive image can be written to a target device using the dd
+utility (in Linux) or Image Writer (in Windows):
+
+  # dd if=kontron-test-image-*.(hddimg|wic) of=TARGET_DEVICE bs=4M
+  # sync
+  # eject TARGET_DEVICE
+
+Note: Compressed images need to be unextracted before being written to a
+      device. For .xz file extensions this can be done with the xz/unxz tool.
+Note: Instead of .hddimg also .wic is used as file extension, for images that
+      contain partitioning. Both can be written directly to the disk as
+      described.
+      Nevertheless, the WIC image will complain about partition table errors
+      when mounted. The reason is that the size of the target storage device
+      is not known at build time. The problem can be fixed with the parted
+      tool or sgdisk -e TARGET_DEVICE after installing the image. The
+      kontron-test-image(-data) will do this automatically at first startup.
+
+TARGET_DEVICE is the device node for the device that should contain the image
+(e.g. /dev/sdd for SATA disk and USB stick or /dev/mmcblk0 for an SD card).
+Please double check you are using the correct device as all data on that device
+will be erased.
+
+WIC images may also be written using bmaptool if available. This tool will also
+extract compressed images on the fly while writing:
+
+  # bmaptool copy kontron-test-image-*.(wic|wic.xz) TARGET_DEVICE
+
+After writing the image, boot the board from this mass storage device . The
+system should be booted to an Xfce graphical desktop.
+
+To get access to the system via ssh protocol, use the root terminal to find out
+or configure an IP address with the ifconfig command. After that, it will be
+possible to log into the system via ssh as 'root' with empty password.
+
+In case if a hdd image is corrupted after copying it to mass storage device,
+try to clean the whole device by executing on host:
+
+  dd if=/dev/zero of=TARGET_DEVICE bs=1M
+  NOTE: all information on TARGET_DEVICE will be erased!
+
+
+IV. Installation to persistent storage
+======================================
+
+In order to install Yocto Linux BSP to persistent storage, proceed with the
+following steps:
+
+a. Prepare a HDD or USB storage with at least 8 GB of free space.
+
+b. Boot the board with BSP image either from bootable USB stick.
+
+c. When the boot loader starts, select the install mode and press ENTER.
+
+d. The installer starts immediately upon entering the console. Please follow
+   on-screen instructions.
+
+e. After the installation is finished, remove the boot device from the board
+   and reboot it.
+
+f. Use root account with empty password to login.

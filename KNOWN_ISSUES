@@ -1,0 +1,23 @@
+Known issues for COMe-xELx Yocto BSP R1.0
+=========================================
+
+KEAPI:
+  * Following KEAPI calls are not supported by the board (either h/w or BIOS):
+     - KEApiGetIntruderStatus, KEApiResetIntruderStatus;
+     - KEApiGetPBITResult, KEApiClearPBITResult;
+     - KEApiGetSpiBusCount, KEApiSpiXfer.
+  * KEApiGetFanSensorInfo returns "unknown" values for max, alarmHi, alramLo,
+     hystHi, hystLo parameters for each fan sensor. It's impossible to
+     obtain this information from NCT7802Y.
+  * KEApiGetTempSensorInfo returns "unknown" values for:
+     - max, min, alarmHi, alramLo, hystHi, hystLo parameters for coretemp
+       sensors;
+     - alarmHi, alramLo, hystHi, hystLo parameters for NCT7802Y sensor.
+  * KEApiGetVoltageSensorInfo returns "unknown" values for max, min,
+     alarmHi, alramLo, hystHi, hystLo parameters for some voltage sensor.
+
+Watchdog:
+  * NMI and SCI events are not available with current implementation.
+
+Ethernet:
+  * GPY215 Phy does not work in 2,5 Gb mode
